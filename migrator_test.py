@@ -2,9 +2,9 @@ import base64
 import pandas as pd
 import streamlit as st
 
-st.title("Ecomsniper Listing Migration Tool")
+st.title("Listing Migration Tool")
 st.write(
-    "Upload your SellerPilot CSV export and your eBay template file below."
+    "Upload your previous vendor CSV export and your eBay template file below."
 )
 
 # 1. File Uploaders
