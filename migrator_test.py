@@ -13,11 +13,31 @@ ebay_file = st.file_uploader(
     "2. Upload eBay Price & Stock Template (CSV)", type=["csv"]
 )
 
+
+# Smart function to handle files with 'sep=;' or extra header junk
+def load_csv_safely(uploaded_file):
+  uploaded_file.seek(0)
+  # Read just the first few rows to check column headers
+  df_temp = pd.read_csv(uploaded_file, nrows=2, encoding="utf-8", dtype=str)
+
+  # Check if 'sep=' or metadata exists in the columns or first row
+  has_separator_junk = any(
+      "sep=" in str(col).lower() for col in df_temp.columns
+  ) or (len(df_temp.columns) == 1 and "sep=" in str(df_temp.iloc[0, 0]).lower())
+
+  uploaded_file.seek(0)
+  if has_separator_junk:
+    # Skip the separator line and read from the true header row
+    return pd.read_csv(uploaded_file, skiprows=1, encoding="utf-8", dtype=str)
+  else:
+    return pd.read_csv(uploaded_file, encoding="utf-8", dtype=str)
+
+
 if vendor_file and ebay_file:
   try:
-    # Read CSVs
-    df_vendor = pd.read_csv(vendor_file)
-    df_ebay = pd.read_csv(ebay_file)
+    # Read CSVs safely using our smart loader
+    df_vendor = load_csv_safely(vendor_file)
+    df_ebay = load_csv_safely(ebay_file)
 
     # Standardize column headers to remove accidental trailing spaces
     df_vendor.columns = df_vendor.columns.str.strip()
@@ -69,7 +89,7 @@ if vendor_file and ebay_file:
             "utf-8"
         )
 
-      # CLEAN VENDOR FILE: Filter out connector rows (index 0 / rows with '*', blanks, or non-digits)
+      # CLEAN VENDOR FILE: Filter out connector rows or non-digits
       valid_vendor_rows = df_vendor[
           df_vendor[vendor_item_id_col].notna()
           & (df_vendor[vendor_item_id_col] != "")
@@ -90,24 +110,22 @@ if vendor_file and ebay_file:
       for idx in range(len(df_ebay)):
         item_num = df_ebay.loc[idx, ebay_item_id_col]
 
-        # Check if the eBay row is a connector/metadata row (e.g., contains '*', is blank, or non-numeric)
+        # Check if the eBay row is a connector, info line (#INFOVersion), or non-numeric
         if (
             pd.isna(item_num)
             or item_num == ""
             or str(item_num).lower() == "nan"
             or "*" in str(item_num)
+            or str(item_num).startswith("#")
             or not str(item_num).isdigit()
         ):
-          # Leave connector or header rows completely untouched
-          continue
+          continue  # Skip metadata/connector rows safely
 
         # Match and populate SKU or clear if no match
         if item_num in vendor_mapping and vendor_mapping[item_num]:
           df_ebay.loc[idx, ebay_sku_col] = vendor_mapping[item_num]
         else:
-          df_ebay.loc[idx, ebay_sku_col] = (
-              ""  # Populate empty if no match found
-          )
+          df_ebay.loc[idx, ebay_sku_col] = ""
 
       st.success("CSVs successfully matched and converted!")
       st.dataframe(df_ebay.head(10))  # Preview first 10 rows
