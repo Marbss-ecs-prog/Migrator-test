@@ -72,19 +72,27 @@ if sellerpilot_file and ebay_file:
           zip(df_sp[sp_item_id_col], df_sp[sp_asin_col].apply(encode_asin))
       )
 
-      # Process rows starting from index 1 (skipping index 0 which contains eBay connectors)
+      # Smart row processing: Process rows where Item number looks like a real ID, skip connectors/headers
       for idx in range(len(df_ebay)):
-        if idx == 0:
-          continue  # Leave the first data row (connector row) untouched
-
         item_num = df_ebay.loc[idx, ebay_item_id_col]
 
-        # Check if item number matches and has a valid encoded ASIN
+        # Check if the row is a connector/metadata row (e.g., contains '*', is blank, or non-numeric)
+        if (
+            pd.isna(item_num)
+            or item_num == ""
+            or item_num.lower() == "nan"
+            or "*" in item_num
+            or not item_num.isdigit()
+        ):
+          # Leave connector or header rows completely untouched
+          continue
+
+        # If it's a valid item number, check mapping
         if item_num in sp_mapping and sp_mapping[item_num]:
           df_ebay.loc[idx, ebay_sku_col] = sp_mapping[item_num]
         else:
           df_ebay.loc[idx, ebay_sku_col] = (
-              ""  # Fixed: Added '=' to properly clear unmatched rows
+              ""  # Populate empty if no match or missing SKU
           )
 
       st.success("CSVs successfully matched and converted!")
