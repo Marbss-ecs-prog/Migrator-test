@@ -5,7 +5,6 @@ import streamlit as st
 st.title("ECS Listing Migration Tool")
 st.write("Upload your Past Vendor CSV export and your eBay template file below.")
 
-# 1. File Uploaders
 vendor_file = st.file_uploader(
     "1. Upload Past Vendor Export (CSV)", type=["csv"]
 )
@@ -14,131 +13,107 @@ ebay_file = st.file_uploader(
 )
 
 
-# Smart Header Hunter: Automatically skips #INFO versions, metadata, and sep= lines
-def load_csv_safely(uploaded_file, target_columns):
+# Simple, reliable CSV loader with semicolon/comma auto-detection
+def load_csv_clean(uploaded_file):
   uploaded_file.seek(0)
-  lines = uploaded_file.readlines()
-  header_row_index = 0
-
-  for idx, line in enumerate(lines[:15]):
-    line_str = line.decode("utf-8", errors="ignore")
-    if any(target in line_str for target in target_columns):
-      header_row_index = idx
-      break
-
-  sample_header = lines[header_row_index].decode("utf-8", errors="ignore")
-  sep = (
-      ";"
-      if ";" in sample_header and "," not in sample_header.splitlines()[0]
-      else ","
-  )
-
+  sample = uploaded_file.read(2048).decode("utf-8", errors="ignore")
   uploaded_file.seek(0)
-  return pd.read_csv(
-      uploaded_file,
-      skiprows=header_row_index,
-      encoding="utf-8",
-      dtype=str,
-      sep=sep,
-  )
+
+  sep = ";" if ";" in sample and "," not in sample.splitlines()[0] else ","
+
+  # Read lines, skip any metadata lines starting with # or sep=
+  df = pd.read_csv(uploaded_file, sep=sep, dtype=str, skiprows=lambda x: x < 0)
+
+  # Drop rows where columns are metadata junk
+  df = df.dropna(how="all")
+  return df
 
 
 if vendor_file and ebay_file:
   try:
-    vendor_target_cols = ["eBay Item ID", "ASIN"]
-    ebay_target_cols = ["Item number", "Custom label (SKU)"]
+    df_vendor = load_csv_clean(vendor_file)
+    df_ebay = load_csv_clean(ebay_file)
 
-    df_vendor = load_csv_safely(vendor_file, vendor_target_cols)
-    df_ebay = load_csv_safely(ebay_file, ebay_target_cols)
-
-    # Standardize column headers
+    # Clean column headers
     df_vendor.columns = df_vendor.columns.str.strip()
     df_ebay.columns = df_ebay.columns.str.strip()
 
-    vendor_item_id_col = "eBay Item ID"
+    vendor_item_col = "eBay Item ID"
     vendor_asin_col = "ASIN"
-
-    ebay_item_id_col = "Item number"
+    ebay_item_col = "Item number"
     ebay_sku_col = "Custom label (SKU)"
 
-    missing_vendor = [
-        col for col in vendor_target_cols if col not in df_vendor.columns
-    ]
-    missing_ebay = [
-        col for col in ebay_target_cols if col not in df_ebay.columns
-    ]
-
-    if missing_vendor:
+    # Verify columns exist
+    if (
+        vendor_item_col not in df_vendor.columns
+        or vendor_asin_col not in df_vendor.columns
+    ):
       st.error(
-          f"Past Vendor CSV is missing columns: {missing_vendor}. Found"
-          f" columns: {list(df_vendor.columns)}"
+          f"Past Vendor CSV missing required columns. Found:"
+          f" {list(df_vendor.columns)}"
       )
-    elif missing_ebay:
+    elif (
+        ebay_item_col not in df_ebay.columns
+        or ebay_sku_col not in df_ebay.columns
+    ):
       st.error(
-          f"eBay CSV is missing columns: {missing_ebay}. Found columns:"
-          f" {list(df_ebay.columns)}"
+          f"eBay CSV missing required columns. Found: {list(df_ebay.columns)}"
       )
     else:
-      # --- FIX: NORMALIZE STRINGS FIRST BEFORE FILTERING ---
-      df_vendor[vendor_item_id_col] = (
-          df_vendor[vendor_item_id_col].astype(str).str.strip()
-      )
-      df_vendor[vendor_asin_col] = (
-          df_vendor[vendor_asin_col].astype(str).str.strip()
-      )
-      df_ebay[ebay_item_id_col] = (
-          df_ebay[ebay_item_id_col].astype(str).str.strip()
-      )
-
-      # Base64 encoder function
-      def encode_asin(asin):
-        if pd.isna(asin) or asin == "" or asin.lower() == "nan":
+      # --- CRITICAL FIX: Clean IDs and strip any '.0' artifacts ---
+      def clean_id(val):
+        if pd.isna(val) or str(val).strip() == "" or str(val).lower() == "nan":
           return ""
-        return base64.b64encode(asin.encode("utf-8")).decode("utf-8")
+        v = str(val).strip()
+        if v.endswith(".0"):
+          v = v[:-2]
+        return v
 
-      # CLEAN VENDOR FILE: Keep valid item IDs (not empty, not NaN, no '*' or '#')
-      valid_vendor_rows = df_vendor[
-          df_vendor[vendor_item_id_col].notna()
-          & (df_vendor[vendor_item_id_col] != "")
-          & (df_vendor[vendor_item_id_col].str.lower() != "nan")
-          & (~df_vendor[vendor_item_id_col].str.contains(r"\*|#", na=False))
-      ].copy()
+      df_vendor["clean_id"] = df_vendor[vendor_item_col].apply(clean_id)
+      df_ebay["clean_id"] = df_ebay[ebay_item_col].apply(clean_id)
 
-      # Create lookup dictionary
-      valid_vendor_rows["encoded_asin"] = valid_vendor_rows[
-          vendor_asin_col
-      ].apply(encode_asin)
-      vendor_mapping = dict(
-          zip(
-              valid_vendor_rows[vendor_item_id_col],
-              valid_vendor_rows["encoded_asin"],
-          )
-      )
+      # Base64 encoder
+      def encode_asin(asin):
+        if pd.isna(asin) or str(asin).strip() == "" or str(asin).lower() == "nan":
+          return ""
+        return base64.b64encode(str(asin).strip().encode("utf-8")).decode(
+            "utf-8"
+        )
 
-      # PROCESS EBAY TEMPLATE
-      for idx in range(len(df_ebay)):
-        item_num = df_ebay.loc[idx, ebay_item_id_col]
+      # Build dictionary mapping (Item ID -> Base64 ASIN)
+      vendor_mapping = {}
+      for _, row in df_vendor.iterrows():
+        item_id = row["clean_id"]
+        asin = row[vendor_asin_col]
+        if item_id and item_id.isdigit():  # Ensure it's a valid number ID
+          vendor_mapping[item_id] = encode_asin(asin)
 
-        # Skip metadata, #INFOVersion, connector (*), or blank rows
-        if (
-            pd.isna(item_num)
-            or item_num == ""
-            or item_num.lower() == "nan"
-            or "*" in item_num
-            or item_num.startswith("#")
-        ):
+      # Track matches for feedback
+      match_count = 0
+
+      # Process eBay template
+      for idx, row in df_ebay.iterrows():
+        item_id = row["clean_id"]
+
+        # Skip header/connector rows like * or #INFO
+        if not item_id or not item_id.isdigit() or item_id.startswith("#"):
           continue
 
-        # Match and populate SKU or clear if no match
-        if item_num in vendor_mapping and vendor_mapping[item_num]:
-          df_ebay.loc[idx, ebay_sku_col] = vendor_mapping[item_num]
+        if item_id in vendor_mapping and vendor_mapping[item_id]:
+          df_ebay.loc[idx, ebay_sku_col] = vendor_mapping[item_id]
+          match_count += 1
         else:
           df_ebay.loc[idx, ebay_sku_col] = ""
 
-      st.success("CSVs successfully matched and converted!")
+      # Drop temporary helper column before download
+      df_ebay = df_ebay.drop(columns=["clean_id"])
+
+      st.success(
+          f"Successfully processed! Matched {match_count} items with Base64"
+          " SKUs."
+      )
       st.dataframe(df_ebay.head(10))
 
-      # Generate downloadable CSV file
       csv_data = df_ebay.to_csv(index=False).encode("utf-8")
       st.download_button(
           label="📥 Download ECS-Ready eBay CSV",
