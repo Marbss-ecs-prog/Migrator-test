@@ -75,7 +75,7 @@ if sellerpilot_file and ebay_file:
       # Process rows starting from index 1 (skipping index 0 which contains eBay connectors)
       for idx in range(len(df_ebay)):
         if idx == 0:
-          continue  # Leave the first data row untouched
+          continue  # Leave the first data row (connector row) untouched
 
         item_num = df_ebay.loc[idx, ebay_item_id_col]
 
@@ -83,9 +83,9 @@ if sellerpilot_file and ebay_file:
         if item_num in sp_mapping and sp_mapping[item_num]:
           df_ebay.loc[idx, ebay_sku_col] = sp_mapping[item_num]
         else:
-          df_ebay.loc[idx, ebay_sku_col] (
-              ""
-          )  # Populate empty if no match or missing SKU
+          df_ebay.loc[idx, ebay_sku_col] = (
+              ""  # Fixed: Added '=' to properly clear unmatched rows
+          )
 
       st.success("CSVs successfully matched and converted!")
       st.dataframe(df_ebay.head(10))  # Preview first 10 rows
