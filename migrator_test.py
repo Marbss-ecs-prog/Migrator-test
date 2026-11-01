@@ -2,39 +2,39 @@ import base64
 import pandas as pd
 import streamlit as st
 
-st.title("Listing Migration Tool")
-st.write(
-    "Upload your previous vendor CSV export and your eBay template file below."
-)
+st.title("ECS Listing Migration Tool")
+st.write("Upload your Past Vendor CSV export and your eBay template file below.")
 
 # 1. File Uploaders
-sellerpilot_file = st.file_uploader(
-    "1. Upload SellerPilot Export (CSV)", type=["csv"]
+vendor_file = st.file_uploader(
+    "1. Upload Past Vendor Export (CSV)", type=["csv"]
 )
 ebay_file = st.file_uploader(
     "2. Upload eBay Price & Stock Template (CSV)", type=["csv"]
 )
 
-if sellerpilot_file and ebay_file:
+if vendor_file and ebay_file:
   try:
     # Read CSVs
-    df_sp = pd.read_csv(sellerpilot_file)
+    df_vendor = pd.read_csv(vendor_file)
     df_ebay = pd.read_csv(ebay_file)
 
     # Standardize column headers to remove accidental trailing spaces
-    df_sp.columns = df_sp.columns.str.strip()
+    df_vendor.columns = df_vendor.columns.str.strip()
     df_ebay.columns = df_ebay.columns.str.strip()
 
     # Define your exact column names
-    sp_item_id_col = "eBay Item ID"
-    sp_asin_col = "ASIN"
+    vendor_item_id_col = "eBay Item ID"
+    vendor_asin_col = "ASIN"
 
     ebay_item_id_col = "Item number"
     ebay_sku_col = "Custom label (SKU)"
 
     # Verify that the required columns exist in both files
-    missing_sp = [
-        col for col in [sp_item_id_col, sp_asin_col] if col not in df_sp.columns
+    missing_vendor = [
+        col
+        for col in [vendor_item_id_col, vendor_asin_col]
+        if col not in df_vendor.columns
     ]
     missing_ebay = [
         col
@@ -42,10 +42,10 @@ if sellerpilot_file and ebay_file:
         if col not in df_ebay.columns
     ]
 
-    if missing_sp:
+    if missing_vendor:
       st.error(
-          f"SellerPilot CSV is missing columns: {missing_sp}. Found columns:"
-          f" {list(df_sp.columns)}"
+          f"Past Vendor CSV is missing columns: {missing_vendor}. Found"
+          f" columns: {list(df_vendor.columns)}"
       )
     elif missing_ebay:
       st.error(
@@ -54,7 +54,9 @@ if sellerpilot_file and ebay_file:
       )
     else:
       # Normalize IDs to string
-      df_sp[sp_item_id_col] = df_sp[sp_item_id_col].astype(str).str.strip()
+      df_vendor[vendor_item_id_col] = (
+          df_vendor[vendor_item_id_col].astype(str).str.strip()
+      )
       df_ebay[ebay_item_id_col] = (
           df_ebay[ebay_item_id_col].astype(str).str.strip()
       )
@@ -67,21 +69,21 @@ if sellerpilot_file and ebay_file:
             "utf-8"
         )
 
-      # CLEAN SELLERPILOT: Filter out connector rows (index 0 / rows with '*', blanks, or non-digits)
-      valid_sp_rows = df_sp[
-          df_sp[sp_item_id_col].notna()
-          & (df_sp[sp_item_id_col] != "")
-          & (df_sp[sp_item_id_col].str.lower() != "nan")
-          & (~df_sp[sp_item_id_col].str.contains(r"\*", na=False))
-          & (df_sp[sp_item_id_col].str.isdigit())
+      # CLEAN VENDOR FILE: Filter out connector rows (index 0 / rows with '*', blanks, or non-digits)
+      valid_vendor_rows = df_vendor[
+          df_vendor[vendor_item_id_col].notna()
+          & (df_vendor[vendor_item_id_col] != "")
+          & (df_vendor[vendor_item_id_col].str.lower() != "nan")
+          & (~df_vendor[vendor_item_id_col].str.contains(r"\*", na=False))
+          & (df_vendor[vendor_item_id_col].str.isdigit())
       ].copy()
 
-      # Create the lookup dictionary using only clean, valid SellerPilot rows
-      valid_sp_rows["encoded_asin"] = valid_sp_rows[sp_asin_col].apply(
-          encode_asin
-      )
-      sp_mapping = dict(
-          zip(valid_sp_rows[sp_item_id_col], valid_sp_rows["encoded_asin"])
+      # Create the lookup dictionary using only clean, valid rows
+      valid_vendor_rows["encoded_asin"] = valid_vendor_rows[
+          vendor_asin_col
+      ].apply(encode_asin)
+      vendor_mapping = dict(
+          zip(valid_vendor_rows[vendor_item_id_col], valid_vendor_rows["encoded_asin"])
       )
 
       # PROCESS EBAY TEMPLATE: Loop through rows and match
@@ -100,8 +102,8 @@ if sellerpilot_file and ebay_file:
           continue
 
         # Match and populate SKU or clear if no match
-        if item_num in sp_mapping and sp_mapping[item_num]:
-          df_ebay.loc[idx, ebay_sku_col] = sp_mapping[item_num]
+        if item_num in vendor_mapping and vendor_mapping[item_num]:
+          df_ebay.loc[idx, ebay_sku_col] = vendor_mapping[item_num]
         else:
           df_ebay.loc[idx, ebay_sku_col] = (
               ""  # Populate empty if no match found
@@ -113,9 +115,9 @@ if sellerpilot_file and ebay_file:
       # Generate downloadable CSV file
       csv_data = df_ebay.to_csv(index=False).encode("utf-8")
       st.download_button(
-          label="📥 Download Ecomsniper-Ready eBay CSV",
+          label="📥 Download ECS-Ready eBay CSV",
           data=csv_data,
-          file_name="Ecomsniper_Ready_eBay_Template.csv",
+          file_name="ECS_Ready_eBay_Template.csv",
           mime="text/csv",
       )
 
