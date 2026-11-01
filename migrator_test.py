@@ -13,26 +13,40 @@ ebay_file = st.file_uploader(
 )
 
 
-# Simple, reliable CSV loader with semicolon/comma auto-detection
-def load_csv_clean(uploaded_file):
+# Bulletproof CSV loader that skips sep= and #INFO junk lines dynamically
+def load_csv_clean(uploaded_file, target_columns):
   uploaded_file.seek(0)
-  sample = uploaded_file.read(2048).decode("utf-8", errors="ignore")
+  lines = uploaded_file.readlines()
+
+  header_idx = 0
+  for idx, line in enumerate(lines[:15]):
+    line_str = line.decode("utf-8", errors="ignore").strip()
+    # Skip metadata lines like sep= or comments starting with #
+    if line_str.lower().startswith("sep=") or line_str.startswith("#"):
+      continue
+    # Check if this line contains our expected columns
+    if any(col.lower() in line_str.lower() for col in target_columns):
+      header_idx = idx
+      break
+
+  # Detect delimiter from the actual header line
+  header_line = lines[header_idx].decode("utf-8", errors="ignore")
+  sep = ";" if ";" in header_line and "," not in header_line else ","
+
   uploaded_file.seek(0)
-
-  sep = ";" if ";" in sample and "," not in sample.splitlines()[0] else ","
-
-  # Read lines, skip any metadata lines starting with # or sep=
-  df = pd.read_csv(uploaded_file, sep=sep, dtype=str, skiprows=lambda x: x < 0)
-
-  # Drop rows where columns are metadata junk
-  df = df.dropna(how="all")
-  return df
+  df = pd.read_csv(
+      uploaded_file, skiprows=header_idx, sep=sep, dtype=str, encoding="utf-8"
+  )
+  return df.dropna(how="all")
 
 
 if vendor_file and ebay_file:
   try:
-    df_vendor = load_csv_clean(vendor_file)
-    df_ebay = load_csv_clean(ebay_file)
+    vendor_target_cols = ["eBay Item ID", "ASIN"]
+    ebay_target_cols = ["Item number", "Custom label (SKU)"]
+
+    df_vendor = load_csv_clean(vendor_file, vendor_target_cols)
+    df_ebay = load_csv_clean(ebay_file, ebay_target_cols)
 
     # Clean column headers
     df_vendor.columns = df_vendor.columns.str.strip()
@@ -44,23 +58,25 @@ if vendor_file and ebay_file:
     ebay_sku_col = "Custom label (SKU)"
 
     # Verify columns exist
-    if (
-        vendor_item_col not in df_vendor.columns
-        or vendor_asin_col not in df_vendor.columns
-    ):
+    missing_vendor = [
+        col for col in vendor_target_cols if col not in df_vendor.columns
+    ]
+    missing_ebay = [
+        col for col in ebay_target_cols if col not in df_ebay.columns
+    ]
+
+    if missing_vendor:
       st.error(
-          f"Past Vendor CSV missing required columns. Found:"
+          f"Past Vendor CSV missing required columns: {missing_vendor}. Found:"
           f" {list(df_vendor.columns)}"
       )
-    elif (
-        ebay_item_col not in df_ebay.columns
-        or ebay_sku_col not in df_ebay.columns
-    ):
+    elif missing_ebay:
       st.error(
-          f"eBay CSV missing required columns. Found: {list(df_ebay.columns)}"
+          f"eBay CSV missing required columns: {missing_ebay}. Found:"
+          f" {list(df_ebay.columns)}"
       )
     else:
-      # --- CRITICAL FIX: Clean IDs and strip any '.0' artifacts ---
+      # Clean IDs and strip any '.0' float artifacts
       def clean_id(val):
         if pd.isna(val) or str(val).strip() == "" or str(val).lower() == "nan":
           return ""
@@ -85,10 +101,9 @@ if vendor_file and ebay_file:
       for _, row in df_vendor.iterrows():
         item_id = row["clean_id"]
         asin = row[vendor_asin_col]
-        if item_id and item_id.isdigit():  # Ensure it's a valid number ID
+        if item_id and item_id.isdigit():
           vendor_mapping[item_id] = encode_asin(asin)
 
-      # Track matches for feedback
       match_count = 0
 
       # Process eBay template
@@ -105,7 +120,6 @@ if vendor_file and ebay_file:
         else:
           df_ebay.loc[idx, ebay_sku_col] = ""
 
-      # Drop temporary helper column before download
       df_ebay = df_ebay.drop(columns=["clean_id"])
 
       st.success(
