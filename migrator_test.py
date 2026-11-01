@@ -53,7 +53,7 @@ if sellerpilot_file and ebay_file:
           f" {list(df_ebay.columns)}"
       )
     else:
-      # Normalize IDs to string to ensure clean matching
+      # Normalize IDs to string
       df_sp[sp_item_id_col] = df_sp[sp_item_id_col].astype(str).str.strip()
       df_ebay[ebay_item_id_col] = (
           df_ebay[ebay_item_id_col].astype(str).str.strip()
@@ -67,32 +67,44 @@ if sellerpilot_file and ebay_file:
             "utf-8"
         )
 
-      # Create a lookup dictionary mapping eBay Item ID -> Base64 encoded ASIN
+      # CLEAN SELLERPILOT: Filter out connector rows (index 0 / rows with '*', blanks, or non-digits)
+      valid_sp_rows = df_sp[
+          df_sp[sp_item_id_col].notna()
+          & (df_sp[sp_item_id_col] != "")
+          & (df_sp[sp_item_id_col].str.lower() != "nan")
+          & (~df_sp[sp_item_id_col].str.contains(r"\*", na=False))
+          & (df_sp[sp_item_id_col].str.isdigit())
+      ].copy()
+
+      # Create the lookup dictionary using only clean, valid SellerPilot rows
+      valid_sp_rows["encoded_asin"] = valid_sp_rows[sp_asin_col].apply(
+          encode_asin
+      )
       sp_mapping = dict(
-          zip(df_sp[sp_item_id_col], df_sp[sp_asin_col].apply(encode_asin))
+          zip(valid_sp_rows[sp_item_id_col], valid_sp_rows["encoded_asin"])
       )
 
-      # Smart row processing: Process rows where Item number looks like a real ID, skip connectors/headers
+      # PROCESS EBAY TEMPLATE: Loop through rows and match
       for idx in range(len(df_ebay)):
         item_num = df_ebay.loc[idx, ebay_item_id_col]
 
-        # Check if the row is a connector/metadata row (e.g., contains '*', is blank, or non-numeric)
+        # Check if the eBay row is a connector/metadata row (e.g., contains '*', is blank, or non-numeric)
         if (
             pd.isna(item_num)
             or item_num == ""
-            or item_num.lower() == "nan"
-            or "*" in item_num
-            or not item_num.isdigit()
+            or str(item_num).lower() == "nan"
+            or "*" in str(item_num)
+            or not str(item_num).isdigit()
         ):
           # Leave connector or header rows completely untouched
           continue
 
-        # If it's a valid item number, check mapping
+        # Match and populate SKU or clear if no match
         if item_num in sp_mapping and sp_mapping[item_num]:
           df_ebay.loc[idx, ebay_sku_col] = sp_mapping[item_num]
         else:
           df_ebay.loc[idx, ebay_sku_col] = (
-              ""  # Populate empty if no match or missing SKU
+              ""  # Populate empty if no match found
           )
 
       st.success("CSVs successfully matched and converted!")
