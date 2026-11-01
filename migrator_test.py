@@ -72,14 +72,20 @@ if sellerpilot_file and ebay_file:
           zip(df_sp[sp_item_id_col], df_sp[sp_asin_col].apply(encode_asin))
       )
 
-      # Update the 'Custom label (SKU)' column in the eBay template
-      def update_sku(row):
-        item_num = row[ebay_item_id_col]
-        if item_num in sp_mapping and sp_mapping[item_num]:
-          return sp_mapping[item_num]
-        return row[ebay_sku_col]  # Keep original if no match found
+      # Process rows starting from index 1 (skipping index 0 which contains eBay connectors)
+      for idx in range(len(df_ebay)):
+        if idx == 0:
+          continue  # Leave the first data row untouched
 
-      df_ebay[ebay_sku_col] = df_ebay.apply(update_sku, axis=1)
+        item_num = df_ebay.loc[idx, ebay_item_id_col]
+
+        # Check if item number matches and has a valid encoded ASIN
+        if item_num in sp_mapping and sp_mapping[item_num]:
+          df_ebay.loc[idx, ebay_sku_col] = sp_mapping[item_num]
+        else:
+          df_ebay.loc[idx, ebay_sku_col] (
+              ""
+          )  # Populate empty if no match or missing SKU
 
       st.success("CSVs successfully matched and converted!")
       st.dataframe(df_ebay.head(10))  # Preview first 10 rows
