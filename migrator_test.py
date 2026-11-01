@@ -14,20 +14,18 @@ ebay_file = st.file_uploader(
 )
 
 
-# Smart Header Hunter: Automatically skips #INFO versions, metadata, and sep= lines to find real headers
+# Smart Header Hunter: Automatically skips #INFO versions, metadata, and sep= lines
 def load_csv_safely(uploaded_file, target_columns):
   uploaded_file.seek(0)
   lines = uploaded_file.readlines()
   header_row_index = 0
 
-  # Scan down the first 15 lines to locate the true header row containing our target columns
   for idx, line in enumerate(lines[:15]):
     line_str = line.decode("utf-8", errors="ignore")
     if any(target in line_str for target in target_columns):
       header_row_index = idx
       break
 
-  # Auto-detect delimiter (; vs ,) from the actual header line
   sample_header = lines[header_row_index].decode("utf-8", errors="ignore")
   sep = (
       ";"
@@ -35,7 +33,6 @@ def load_csv_safely(uploaded_file, target_columns):
       else ","
   )
 
-  # Re-read the CSV starting cleanly from the identified header row
   uploaded_file.seek(0)
   return pd.read_csv(
       uploaded_file,
@@ -48,15 +45,13 @@ def load_csv_safely(uploaded_file, target_columns):
 
 if vendor_file and ebay_file:
   try:
-    # Define expected columns for each file type
     vendor_target_cols = ["eBay Item ID", "ASIN"]
     ebay_target_cols = ["Item number", "Custom label (SKU)"]
 
-    # Load both files safely using our Header Hunter
     df_vendor = load_csv_safely(vendor_file, vendor_target_cols)
     df_ebay = load_csv_safely(ebay_file, ebay_target_cols)
 
-    # Standardize column headers to remove accidental trailing spaces
+    # Standardize column headers
     df_vendor.columns = df_vendor.columns.str.strip()
     df_ebay.columns = df_ebay.columns.str.strip()
 
@@ -66,7 +61,6 @@ if vendor_file and ebay_file:
     ebay_item_id_col = "Item number"
     ebay_sku_col = "Custom label (SKU)"
 
-    # Verify that the required columns exist in both files
     missing_vendor = [
         col for col in vendor_target_cols if col not in df_vendor.columns
     ]
@@ -85,9 +79,12 @@ if vendor_file and ebay_file:
           f" {list(df_ebay.columns)}"
       )
     else:
-      # Normalize IDs to string
+      # --- FIX: NORMALIZE STRINGS FIRST BEFORE FILTERING ---
       df_vendor[vendor_item_id_col] = (
           df_vendor[vendor_item_id_col].astype(str).str.strip()
+      )
+      df_vendor[vendor_asin_col] = (
+          df_vendor[vendor_asin_col].astype(str).str.strip()
       )
       df_ebay[ebay_item_id_col] = (
           df_ebay[ebay_item_id_col].astype(str).str.strip()
@@ -95,19 +92,16 @@ if vendor_file and ebay_file:
 
       # Base64 encoder function
       def encode_asin(asin):
-        if pd.isna(asin) or str(asin).strip() == "" or str(asin) == "nan":
+        if pd.isna(asin) or asin == "" or asin.lower() == "nan":
           return ""
-        return base64.b64encode(str(asin).strip().encode("utf-8")).decode(
-            "utf-8"
-        )
+        return base64.b64encode(asin.encode("utf-8")).decode("utf-8")
 
-      # CLEAN VENDOR FILE: Filter out connector rows or non-digits
+      # CLEAN VENDOR FILE: Keep valid item IDs (not empty, not NaN, no '*' or '#')
       valid_vendor_rows = df_vendor[
           df_vendor[vendor_item_id_col].notna()
           & (df_vendor[vendor_item_id_col] != "")
           & (df_vendor[vendor_item_id_col].str.lower() != "nan")
-          & (~df_vendor[vendor_item_id_col].str.contains(r"\*", na=False))
-          & (df_vendor[vendor_item_id_col].str.isdigit())
+          & (~df_vendor[vendor_item_id_col].str.contains(r"\*|#", na=False))
       ].copy()
 
       # Create lookup dictionary
@@ -129,10 +123,9 @@ if vendor_file and ebay_file:
         if (
             pd.isna(item_num)
             or item_num == ""
-            or str(item_num).lower() == "nan"
-            or "*" in str(item_num)
-            or str(item_num).startswith("#")
-            or not str(item_num).isdigit()
+            or item_num.lower() == "nan"
+            or "*" in item_num
+            or item_num.startswith("#")
         ):
           continue
 
