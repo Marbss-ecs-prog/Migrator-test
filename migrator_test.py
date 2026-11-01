@@ -14,28 +14,46 @@ ebay_file = st.file_uploader(
 )
 
 
-# Smart function to handle files with 'sep=;' or extra header junk
+# Smart function to auto-detect delimiters (commas, semicolons) and handle metadata lines
 def load_csv_safely(uploaded_file):
   uploaded_file.seek(0)
-  # Read just the first few rows to check column headers
-  df_temp = pd.read_csv(uploaded_file, nrows=2, encoding="utf-8", dtype=str)
 
-  # Check if 'sep=' or metadata exists in the columns or first row
+  # Step A: Detect separator (comma vs semicolon)
+  sample_bytes = uploaded_file.read(2048)
+  sample_str = ""
+  try:
+    sample_str = sample_bytes.decode("utf-8")
+  except Exception:
+    sample_str = sample_bytes.decode("latin1", errors="ignore")
+
+  uploaded_file.seek(0)
+
+  # Check if file uses semicolon separator (common in Europe/Turkey)
+  sep = ";" if ";" in sample_str and "," not in sample_str.splitlines()[0] else ","
+
+  # Read first few lines to check for sep=; header junk
+  df_temp = pd.read_csv(
+      uploaded_file, nrows=2, encoding="utf-8", dtype=str, sep=sep
+  )
+
   has_separator_junk = any(
       "sep=" in str(col).lower() for col in df_temp.columns
   ) or (len(df_temp.columns) == 1 and "sep=" in str(df_temp.iloc[0, 0]).lower())
 
   uploaded_file.seek(0)
+
+  # Read full file with correct separator
   if has_separator_junk:
-    # Skip the separator line and read from the true header row
-    return pd.read_csv(uploaded_file, skiprows=1, encoding="utf-8", dtype=str)
+    return pd.read_csv(
+        uploaded_file, skiprows=1, encoding="utf-8", dtype=str, sep=sep
+    )
   else:
-    return pd.read_csv(uploaded_file, encoding="utf-8", dtype=str)
+    return pd.read_csv(uploaded_file, encoding="utf-8", dtype=str, sep=sep)
 
 
 if vendor_file and ebay_file:
   try:
-    # Read CSVs safely using our smart loader
+    # Read CSVs safely with delimiter auto-detection
     df_vendor = load_csv_safely(vendor_file)
     df_ebay = load_csv_safely(ebay_file)
 
@@ -98,7 +116,7 @@ if vendor_file and ebay_file:
           & (df_vendor[vendor_item_id_col].str.isdigit())
       ].copy()
 
-      # Create the lookup dictionary using only clean, valid rows
+      # Create lookup dictionary
       valid_vendor_rows["encoded_asin"] = valid_vendor_rows[
           vendor_asin_col
       ].apply(encode_asin)
@@ -106,11 +124,11 @@ if vendor_file and ebay_file:
           zip(valid_vendor_rows[vendor_item_id_col], valid_vendor_rows["encoded_asin"])
       )
 
-      # PROCESS EBAY TEMPLATE: Loop through rows and match
+      # PROCESS EBAY TEMPLATE
       for idx in range(len(df_ebay)):
         item_num = df_ebay.loc[idx, ebay_item_id_col]
 
-        # Check if the eBay row is a connector, info line (#INFOVersion), or non-numeric
+        # Skip metadata, #INFOVersion, connector (*), or blank rows
         if (
             pd.isna(item_num)
             or item_num == ""
@@ -119,7 +137,7 @@ if vendor_file and ebay_file:
             or str(item_num).startswith("#")
             or not str(item_num).isdigit()
         ):
-          continue  # Skip metadata/connector rows safely
+          continue
 
         # Match and populate SKU or clear if no match
         if item_num in vendor_mapping and vendor_mapping[item_num]:
@@ -128,9 +146,9 @@ if vendor_file and ebay_file:
           df_ebay.loc[idx, ebay_sku_col] = ""
 
       st.success("CSVs successfully matched and converted!")
-      st.dataframe(df_ebay.head(10))  # Preview first 10 rows
+      st.dataframe(df_ebay.head(10))
 
-      # Generate downloadable CSV file
+      # Export standard comma-separated CSV for eBay upload
       csv_data = df_ebay.to_csv(index=False).encode("utf-8")
       st.download_button(
           label="📥 Download ECS-Ready eBay CSV",
