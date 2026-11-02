@@ -2,7 +2,7 @@ import base64
 import pandas as pd
 import streamlit as st
 
-st.title("ECS Listing Migration Tool")
+st.title("Listing Migration Tool")
 st.write("Upload your pre-cleaned CSV files below.")
 
 # 1. File Uploaders
